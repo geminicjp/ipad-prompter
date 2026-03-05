@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Voice Teleprompter (Markdown Support)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        /* カスタムスクロールバー（非表示にするがスクロールは可能） */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        
+        /* プロンプターテキストエリアのスタイル */
+        #prompter-text:focus {
+            outline: none;
+        }
+
+        /* Markdown Styles within Prompter */
+        #prompter-text h1 {
+            font-size: 1.5em;
+            color: #60a5fa; /* blue-400 */
+            margin-bottom: 0.5em;
+            margin-top: 0.5em;
+            border-bottom: 2px solid #374151;
+            padding-bottom: 0.2em;
+        }
+        #prompter-text h2 {
+            font-size: 1.3em;
+            color: #93c5fd; /* blue-300 */
+            margin-bottom: 0.5em;
+            margin-top: 0.8em;
+        }
+        #prompter-text h3 {
+            font-size: 1.1em;
+            color: #bfdbfe; /* blue-200 */
+            margin-bottom: 0.5em;
+        }
+        #prompter-text p {
+            margin-bottom: 1em;
+            line-height: 1.6;
+        }
+        #prompter-text ul {
+            list-style-type: disc;
+            padding-left: 1.5em;
+            margin-bottom: 1em;
+        }
+        #prompter-text ol {
+            list-style-type: decimal;
+            padding-left: 1.5em;
+            margin-bottom: 1em;
+        }
+        #prompter-text li {
+            margin-bottom: 0.5em;
+        }
+        #prompter-text strong {
+            color: #fbbf24; /* yellow-400 */
+            font-weight: 800;
+        }
+        #prompter-text em {
+            color: #f87171; /* red-400 */
+            font-style: normal;
+            font-weight: bold;
+        }
+        #prompter-text blockquote {
+            border-left: 4px solid #4b5563;
+            padding-left: 1em;
+            color: #9ca3af;
+            font-style: italic;
+        }
+
+        /* 反転モード用クラス */
+        .mirror-mode {
+            transform: scaleX(-1);
+        }
+        
+        /* 音声認識中のハイライトスタイル */
+        .highlight-word {
+            background-color: rgba(255, 255, 0, 0.3);
+            border-radius: 4px;
+            transition: background-color 1s ease-out;
+        }
+        
+        /* コントロールパネルのアニメーション */
+        .controls-transition {
+            transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
+        }
+        
+        body {
+            background-color: #000;
+            color: #fff;
+            overflow: hidden; /* 全体のスクロールを禁止 */
+        }
+
+        /* マイクのアニメーション */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        .mic-active {
+            animation: pulse-ring 2s infinite;
+            background-color: #dc2626 !important; /* Red-600 */
+        }
+        
+        /* 編集モーダル */
+        #edit-modal {
+            transition: opacity 0.3s;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col font-sans">
+
+    <!-- プロンプター表示エリア -->
+    <!-- ガイドライン（中央線） -->
+    <div id="guide-line" class="fixed top-1/2 left-0 w-full h-0.5 bg-red-500 opacity-30 z-10 pointer-events-none hidden"></div>
+    <div id="guide-arrow" class="fixed top-1/2 left-2 text-red-500 opacity-50 z-10 pointer-events-none hidden text-2xl">▶</div>
+
+    <!-- ステータス表示 -->
+    <div id="status-indicator" class="fixed top-4 left-1/2 transform -translate-x-1/2 bg-gray-800/80 px-4 py-2 rounded-full text-sm text-gray-300 pointer-events-none opacity-0 transition-opacity duration-300 z-20">
+        待機中...
+    </div>
+
+    <!-- 編集モーダル -->
+    <div id="edit-modal" class="fixed inset-0 bg-black/90 z-[60] hidden flex flex-col p-4 md:p-8 opacity-0">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-xl font-bold text-white">原稿の編集 (Markdown対応)</h2>
+            <button id="close-modal-btn" class="text-gray-400 hover:text-white">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </button>
+        </div>
+        <textarea id="edit-textarea" class="flex-grow w-full bg-gray-800 text-white p-4 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 text-lg leading-relaxed font-mono" placeholder="# タイトル&#13;&#10;- 箇条書き1&#13;&#10;- 箇条書き2"></textarea>
+        <div class="mt-4 flex justify-end gap-4">
+            <button id="cancel-edit-btn" class="px-6 py-2 rounded bg-gray-700 hover:bg-gray-600 transition">キャンセル</button>
+            <button id="save-edit-btn" class="px-6 py-2 rounded bg-blue-600 hover:bg-blue-500 transition font-bold">反映する</button>
+        </div>
+    </div>
+
+    <div class="relative flex-grow overflow-hidden bg-black">
+        <div id="scroll-container" class="h-full w-full overflow-y-scroll no-scrollbar px-4 md:px-20 py-[45vh]">
+            <div id="prompter-content" class="w-full max-w-4xl mx-auto">
+                <div id="prompter-text" contenteditable="false" class="text-white font-bold leading-relaxed whitespace-pre-wrap outline-none border-none p-4">
+                    <!-- Javascriptで初期コンテンツを挿入します -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- コントロールパネル -->
+    <div id="controls" class="fixed bottom-0 left-0 w-full bg-gray-900/90 backdrop-blur-sm border-t border-gray-700 p-4 z-50 controls-transition">
+        <div class="max-w-4xl mx-auto flex flex-col gap-4">
+            
+            <!-- 上段：再生・一時停止とメイン操作 -->
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <!-- 編集ボタン -->
+                    <button id="edit-btn" class="flex items-center justify-center w-12 h-12 bg-blue-600 rounded-full hover:bg-blue-500 text-white shadow-lg transition" title="原稿を編集">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                    </button>
+
+                    <!-- マイクボタン -->
+                    <button id="mic-btn" class="flex items-center justify-center w-12 h-12 bg-gray-700 rounded-full hover:bg-gray-600 text-white shadow-lg transition relative">
+                        <!-- Mic Icon -->
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                        </svg>
+                    </button>
+
+                    <!-- 再生ボタン -->
+                    <button id="play-btn" class="flex items-center justify-center w-12 h-12 bg-green-600 rounded-full hover:bg-green-500 text-white shadow-lg transition">
+                        <!-- Play Icon -->
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    </button>
+                    <!-- 一時停止ボタン -->
+                    <button id="pause-btn" class="hidden flex items-center justify-center w-12 h-12 bg-yellow-600 rounded-full hover:bg-yellow-500 text-white shadow-lg transition">
+                        <!-- Pause Icon -->
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-6h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="flex items-center gap-2">
+                    <button id="reset-btn" class="px-3 py-1 bg-gray-700 rounded hover:bg-gray-600 text-sm">先頭へ</button>
+                    <button id="mirror-btn" class="px-3 py-1 bg-gray-700 rounded hover:bg-gray-600 text-sm">左右反転</button>
+                    <button id="guide-btn" class="px-3 py-1 bg-gray-700 rounded hover:bg-gray-600 text-sm text-red-300">ガイド線</button>
+                </div>
+            </div>
+
+            <!-- 下段：スライダー調整 -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- 速度 -->
+                <div class="flex items-center gap-3">
+                    <span class="text-xs text-gray-400 w-8">速度</span>
+                    <span class="text-xs text-gray-400">遅</span>
+                    <input type="range" id="speed-slider" min="1" max="10" value="3" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                    <span class="text-xs text-gray-400">速</span>
+                </div>
+                <!-- 文字サイズ -->
+                <div class="flex items-center gap-3">
+                    <span class="text-xs text-gray-400 w-8">サイズ</span>
+                    <span class="text-xs text-gray-400">小</span>
+                    <input type="range" id="font-size-slider" min="20" max="120" value="60" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                    <span class="text-xs text-gray-400">大</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 要素の取得
+        const scrollContainer = document.getElementById('scroll-container');
+        const prompterText = document.getElementById('prompter-text');
+        const prompterContent = document.getElementById('prompter-content');
+        
+        // Modal Elements
+        const editBtn = document.getElementById('edit-btn');
+        const editModal = document.getElementById('edit-modal');
+        const editTextarea = document.getElementById('edit-textarea');
+        const saveEditBtn = document.getElementById('save-edit-btn');
+        const cancelEditBtn = document.getElementById('cancel-edit-btn');
+        const closeModalBtn = document.getElementById('close-modal-btn');
+
+        const playBtn = document.getElementById('play-btn');
+        const pauseBtn = document.getElementById('pause-btn');
+        const micBtn = document.getElementById('mic-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const mirrorBtn = document.getElementById('mirror-btn');
+        const guideBtn = document.getElementById('guide-btn');
+        const speedSlider = document.getElementById('speed-slider');
+        const fontSizeSlider = document.getElementById('font-size-slider');
+        const controls = document.getElementById('controls');
+        const guideLine = document.getElementById('guide-line');
+        const guideArrow = document.getElementById('guide-arrow');
+        const statusIndicator = document.getElementById('status-indicator');
+
+        // 状態管理
+        let isScrolling = false;
+        let scrollSpeed = 3;
+        let animationFrameId;
+        let isMirrored = false;
+        let isGuideVisible = false;
+        let lastScrollTime = 0;
+        let isVoiceActive = false;
+        let recognition = null;
+        let lastFoundIndex = 0;
+        
+        // 初期のMarkdown原稿
+        let currentMarkdown = `# iprompter by Geminic
+Markdown形式に対応しました。
+
+## 特徴
+- **箇条書き** で要点を整理できます。
+- **強調** を使って読むポイントを明確にできます。
+- 見出し（#）を使うと区切りが見やすくなります。
+
+---
+
+ここに原稿を入力または貼り付けてください。
+
+### タップ操作について
+画面のどこかをタップすると「再生/一時停止」が切り替わります。
+
+### 音声追従モードの使い方
+1. 下のマイクボタンを押して許可してください。
+2. 原稿を読み始めると、あなたの声を認識して自動的にスクロールします。
+
+編集は左下の「鉛筆マーク」から行ってください。`;
+
+        // 初期設定
+        function init() {
+            // Markedの設定（改行をbrにする）
+            marked.setOptions({
+                breaks: true
+            });
+            
+            updateFontSize();
+            renderMarkdown(); // 初期テキストのレンダリング
+            checkSpeechSupport();
+            setupModal();
+        }
+        
+        function renderMarkdown() {
+            prompterText.innerHTML = marked.parse(currentMarkdown);
+        }
+
+        // --- モーダル機能 ---
+        function setupModal() {
+            editBtn.addEventListener('click', (e) => {
+                e.stopPropagation(); 
+                // 現在のMarkdownソースをテキストエリアに入れる
+                editTextarea.value = currentMarkdown;
+                
+                editModal.classList.remove('hidden');
+                void editModal.offsetWidth; 
+                editModal.classList.remove('opacity-0');
+                
+                if (isScrolling) stopScroll();
+            });
+
+            function closeModal() {
+                editModal.classList.add('opacity-0');
+                setTimeout(() => {
+                    editModal.classList.add('hidden');
+                }, 300);
+            }
+
+            saveEditBtn.addEventListener('click', () => {
+                // Markdownを保存して反映
+                currentMarkdown = editTextarea.value;
+                renderMarkdown();
+                closeModal();
+                showStatus('原稿を更新しました');
+            });
+
+            cancelEditBtn.addEventListener('click', closeModal);
+            closeModalBtn.addEventListener('click', closeModal);
+        }
+
+        // --- 音声認識機能 ---
+        function checkSpeechSupport() {
+            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+                micBtn.style.display = 'none';
+            }
+        }
+
+        function setupRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechRecognition();
+            recognition.lang = 'ja-JP';
+            recognition.continuous = true;
+            recognition.interimResults = true;
+
+            recognition.onstart = function() {
+                isVoiceActive = true;
+                micBtn.classList.add('mic-active');
+                showStatus('音声認識中... 話してください');
+                if(isScrolling) stopScroll();
+            };
+
+            recognition.onend = function() {
+                // 明示的に停止された場合以外は再開を試みる
+                if (isVoiceActive) {
+                    try {
+                        recognition.start();
+                    } catch(e) {
+                        console.warn("Recognition restart error:", e);
+                        // すでに開始されているなどのエラー(InvalidStateError)なら無視して続行
+                        if (e.name !== 'InvalidStateError') {
+                            isVoiceActive = false;
+                            micBtn.classList.remove('mic-active');
+                            showStatus('エラーにより停止');
+                        }
+                    }
+                } else {
+                    micBtn.classList.remove('mic-active');
+                    showStatus('停止');
+                }
+            };
+
+            recognition.onresult = function(event) {
+                let finalTranscript = '';
+                let interimTranscript = '';
+
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript;
+                    } else {
+                        interimTranscript += event.results[i][0].transcript;
+                    }
+                }
+
+                const transcript = finalTranscript || interimTranscript;
+                if (transcript.length > 1) { 
+                    scrollToSpokenWord(transcript);
+                }
+            };
+
+            recognition.onerror = function(event) {
+                console.error('Speech recognition error', event.error);
+                if (event.error === 'not-allowed') {
+                    showStatus('マイクの使用が許可されていません');
+                    isVoiceActive = false;
+                    micBtn.classList.remove('mic-active');
+                } else if (event.error === 'aborted') {
+                    // 何もしない
+                }
+            };
+        }
+
+        function toggleVoice(e) {
+            e.stopPropagation(); 
+            if (!recognition) setupRecognition();
+
+            if (isVoiceActive) {
+                isVoiceActive = false;
+                try {
+                    recognition.stop();
+                } catch(err) {
+                    console.warn(err);
+                }
+                showStatus('音声認識を終了');
+            } else {
+                try {
+                    recognition.start();
+                } catch(e) {
+                    console.warn(e);
+                    // すでに開始されている場合はアクティブ状態にする
+                    if (e.name === 'InvalidStateError') {
+                        isVoiceActive = true;
+                        micBtn.classList.add('mic-active');
+                        showStatus('音声認識中... 話してください');
+                    }
+                }
+            }
+        }
+
+        function scrollToSpokenWord(transcript) {
+            // 音声認識の検索処理
+            // MarkdownのHTML化に伴い、DOM構造が深くなっているが、TreeWalkerはテキストノードを探すので基本的には動く
+            const cleanTranscript = transcript.replace(/[、。！？\s]/g, '');
+            if (!cleanTranscript) return;
+            const searchKey = cleanTranscript.slice(-10); 
+            const foundRange = findTextRange(searchKey, lastFoundIndex);
+            
+            if (foundRange) {
+                const rect = foundRange.getBoundingClientRect();
+                const containerRect = scrollContainer.getBoundingClientRect();
+                // 画面中央より少し上に合わせる
+                const offset = scrollContainer.scrollTop + rect.top - (window.innerHeight / 2.5);
+                
+                scrollContainer.scrollTo({
+                    top: offset,
+                    behavior: 'smooth'
+                });
+                highlightRange(foundRange);
+            }
+        }
+
+        function findTextRange(searchText, startIndex) {
+            if (!searchText) return null;
+            // TreeWalkerを使ってプロンプター内の全テキストノードを検索
+            const walker = document.createTreeWalker(prompterText, NodeFilter.SHOW_TEXT, null, false);
+            while(walker.nextNode()) {
+                const node = walker.currentNode;
+                const text = node.textContent;
+                // 改行や空白を除去して比較する簡易実装
+                const cleanText = text.replace(/[\n\r]/g, ''); 
+                
+                const index = cleanText.indexOf(searchText);
+                // 厳密な一致は難しいので、部分一致で最初に見つかったものを採用
+                if (index !== -1) {
+                    const range = document.createRange();
+                    // 元のテキストノード上の位置を特定するのは難しい場合があるが、
+                    // ここでは単純にsearchTextの長さ分をハイライト対象とする
+                    // (改行が含まれているとずれる可能性はあるが、プロンプター用途としては許容範囲)
+                    range.setStart(node, index);
+                    // ノードの長さを超えないように制限
+                    const end = Math.min(index + searchText.length, node.length);
+                    range.setEnd(node, end);
+                    return range;
+                }
+            }
+            return null;
+        }
+
+        function highlightRange(range) {
+            showStatus('認識: ' + range.toString());
+        }
+
+        function showStatus(msg) {
+            statusIndicator.textContent = msg;
+            statusIndicator.style.opacity = '1';
+            clearTimeout(window.statusTimer);
+            window.statusTimer = setTimeout(() => {
+                statusIndicator.style.opacity = '0';
+            }, 3000);
+        }
+
+        // --- スクロール機能 ---
+
+        function autoScroll(timestamp) {
+            if (!isScrolling) return;
+
+            if (timestamp - lastScrollTime >= 16) {
+                const pixelsPerFrame = scrollSpeed * 0.4; 
+                scrollContainer.scrollTop += pixelsPerFrame;
+                lastScrollTime = timestamp;
+            }
+            animationFrameId = requestAnimationFrame(autoScroll);
+        }
+
+        function startScroll() {
+            if (isVoiceActive) {
+                isVoiceActive = false;
+                try {
+                    recognition.stop();
+                } catch(e) { console.warn(e); }
+                micBtn.classList.remove('mic-active');
+            }
+
+            isScrolling = true;
+            playBtn.classList.add('hidden');
+            pauseBtn.classList.remove('hidden');
+            
+            // 再生時はコントロールを隠す
+            controls.style.transform = 'translateY(100%)';
+            controls.style.opacity = '0';
+
+            lastScrollTime = performance.now();
+            animationFrameId = requestAnimationFrame(autoScroll);
+        }
+
+        function stopScroll() {
+            isScrolling = false;
+            playBtn.classList.remove('hidden');
+            pauseBtn.classList.add('hidden');
+            
+            // 停止時はコントロールを表示
+            controls.style.transform = 'translateY(0)';
+            controls.style.opacity = '1';
+            
+            cancelAnimationFrame(animationFrameId);
+        }
+
+        // イベントリスナー
+        micBtn.addEventListener('click', toggleVoice);
+        playBtn.addEventListener('click', (e) => { e.stopPropagation(); startScroll(); });
+        pauseBtn.addEventListener('click', (e) => { e.stopPropagation(); stopScroll(); });
+
+        resetBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            stopScroll();
+            scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
+            lastFoundIndex = 0;
+        });
+
+        speedSlider.addEventListener('input', (e) => {
+            scrollSpeed = parseInt(e.target.value);
+        });
+        speedSlider.addEventListener('click', (e) => e.stopPropagation());
+
+        fontSizeSlider.addEventListener('input', updateFontSize);
+        fontSizeSlider.addEventListener('click', (e) => e.stopPropagation());
+        
+        function updateFontSize() {
+            const size = fontSizeSlider.value;
+            prompterText.style.fontSize = `${size}px`;
+        }
+
+        mirrorBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            isMirrored = !isMirrored;
+            if (isMirrored) {
+                prompterContent.classList.add('mirror-mode');
+                mirrorBtn.classList.add('bg-green-600', 'text-white');
+                mirrorBtn.classList.remove('bg-gray-700');
+            } else {
+                prompterContent.classList.remove('mirror-mode');
+                mirrorBtn.classList.remove('bg-green-600', 'text-white');
+                mirrorBtn.classList.add('bg-gray-700');
+            }
+        });
+
+        guideBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            isGuideVisible = !isGuideVisible;
+            if (isGuideVisible) {
+                guideLine.classList.remove('hidden');
+                guideArrow.classList.remove('hidden');
+                guideBtn.classList.add('text-red-500', 'font-bold');
+                guideBtn.classList.remove('text-red-300');
+            } else {
+                guideLine.classList.add('hidden');
+                guideArrow.classList.add('hidden');
+                guideBtn.classList.remove('text-red-500', 'font-bold');
+                guideBtn.classList.add('text-red-300');
+            }
+        });
+
+        // 画面タップで再生/停止（コントロール以外）
+        scrollContainer.addEventListener('click', (e) => {
+            // モーダルが表示されている場合は何もしない
+            if (!editModal.classList.contains('hidden')) return;
+
+            // コンテナ自体のクリック、またはプロンプターテキストのクリックならトグル
+            if (e.target === scrollContainer || e.target.closest('#prompter-content')) {
+                if (isScrolling) {
+                    stopScroll();
+                } else {
+                    startScroll();
+                }
+            }
+        });
+
+        // コントロールパネル自体のクリックは伝播させない
+        controls.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                if (document.activeElement !== editTextarea) {
+                    e.preventDefault();
+                    if (isScrolling) stopScroll();
+                    else startScroll();
+                }
+            }
+        });
+
+        init();
+    </script>
+</body>
+</html>
